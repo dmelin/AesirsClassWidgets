@@ -1,0 +1,11 @@
+## Interface: 16001
+## Title: Aesirs Class Widgets
+## Notes: Class-specific utility widgets for WoW Forever. Includes a hunter radial toolbar.
+## Author: Aesir
+## Version: 1.0.0
+## AllowLoadGameType: camelot
+## SavedVariables: AesirsClassWidgetsDB
+## OptionalDeps: AesirsQualityOfLife
+
+Core.lua
+Widgets/Hunter.lua

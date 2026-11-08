@@ -2,8 +2,36 @@ local _, A = ...
 local events
 local hub, primary, tracking, aspects, mover, feedButton
 local actions, trackButtons, aspectButtons = {}, {}, {}
+local coveredSpells = {}
+local spellbookHooked = false
+
+-- Change only spellbook presentation; leave action-bar APIs and slots alone.
+local function UpdateWidgetSpellStatus(item)
+    local info = item.spellBookItemInfo
+    if item.spellBank == Enum.SpellBookSpellBank.Player and info
+        and not item.isUnlearned and not item.isOffSpec and coveredSpells[info.spellID] then
+        item.actionBarStatus = ActionButtonUtil.ActionBarActionStatus.NotMissing
+        item:UpdateActionBarAnim()
+    end
+end
+
+local function HookSpellbook()
+    if spellbookHooked or not SpellBookItemMixin or not ActionButtonUtil then return end
+    spellbookHooked = true
+    local original = SpellBookItemMixin.UpdateActionBarStatus
+    hooksecurefunc(SpellBookItemMixin, "UpdateActionBarStatus", UpdateWidgetSpellStatus)
+    -- Already-created items have their own copies of the mixin methods.
+    local frame = EnumerateFrames()
+    while frame do
+        if frame.UpdateActionBarStatus == original then
+            hooksecurefunc(frame, "UpdateActionBarStatus", UpdateWidgetSpellStatus)
+            frame:UpdateActionBarStatus()
+        end
+        frame = EnumerateFrames(frame)
+    end
+end
 local dirty, editing, elapsed = true, false, 0
-local SIZE, HUB_SIZE, FAN_RADIUS = 32, 44, 48
+local SIZE, HUB_SIZE, FAN_RADIUS = 32, 44, 60
 local ART = "Interface\\AddOns\\AesirsClassWidgets\\Media\\"
 local ASPECT_IDS = { 13165, 13163, 5118, 13159, 13161, 20043, 34074, 61846 }
 local PET_SPELLS = {
@@ -12,7 +40,14 @@ local PET_SPELLS = {
     { key = "call", id = 883, icon = "Interface\\Icons\\Ability_Hunter_BeastCall" },
     { key = "revive", id = 982, icon = "Interface\\Icons\\Ability_Hunter_BeastSoothe" },
     { key = "tame", id = 1515, icon = "Interface\\Icons\\Ability_Hunter_BeastTaming" },
+    { key = "dismiss", id = 2641, icon = "Interface\\Icons\\Spell_Nature_SpiritWolf" },
+    { key = "train", id = 5149, icon = "Interface\\Icons\\Ability_Hunter_BeastTraining" },
 }
+
+local function MainFanOffset(index)
+    local count = #PET_SPELLS + 2 -- Tracking, Aspects, and pet actions share one ring.
+    return A.FanOffset(index, count, FAN_RADIUS, 90, -360 * (count - 1) / count)
+end
 
 local function DB()
     local settings = A.WidgetSettings("hunter")
@@ -147,10 +182,12 @@ end
 local function Refresh()
     if not hub or InCombatLockdown() then dirty = true; return end
     dirty = false
+    coveredSpells = {}
     local spells, learnedAspects = KnownPetSpells()
     for _, action in ipairs(PET_SPELLS) do
         local button = actions[action.key]
         local id = spells[action.key]
+        if id then coveredSpells[id] = true end
         button.spellID = id
         button:SetAttribute("type", id and "spell" or nil)
         button:SetAttribute("spell", id)
@@ -184,6 +221,7 @@ local function Refresh()
     end
     table.sort(known, function(a, b) return a.spellID < b.spellID end)
     for i, info in ipairs(known) do
+        coveredSpells[info.spellID] = true
         local button = trackButtons[i]
         if not button then
             button = Button("AesirsClassWidgetsTracking" .. i, tracking, "SecureActionButtonTemplate", info.texture)
@@ -207,6 +245,7 @@ local function Refresh()
     for _, id in pairs(learnedAspects) do aspectIDs[#aspectIDs + 1] = id end
     table.sort(aspectIDs)
     for i, id in ipairs(aspectIDs) do
+        coveredSpells[id] = true
         local info = C_Spell.GetSpellInfo(id)
         local button = aspectButtons[i]
         if not button then
@@ -224,6 +263,7 @@ local function Refresh()
     end
     for i = #aspectIDs + 1, #aspectButtons do aspectButtons[i]:SetAttribute("type", nil); aspectButtons[i]:Hide() end
     actions.aspects.note = #aspectIDs == 0 and "No learned aspect spells found." or "Opens Aspects and closes Tracking."
+    HookSpellbook()
 end
 
 local function EditMode(active)
@@ -268,7 +308,7 @@ local function Create()
     ]])
     actions.tracking = Button("AesirsClassWidgetsTrackingMenu", primary, "SecureHandlerClickTemplate", "Interface\\Icons\\Ability_Tracking")
     actions.tracking.title = "Tracking"
-    actions.tracking:SetPoint("CENTER", hub, "CENTER", 0, FAN_RADIUS)
+    actions.tracking:SetPoint("CENTER", hub, "CENTER", MainFanOffset(1))
     actions.tracking:SetFrameRef("tracking", tracking)
     actions.tracking:SetFrameRef("aspects", aspects)
     actions.tracking:SetAttribute("_onclick", [[
@@ -279,7 +319,7 @@ local function Create()
     ]])
     actions.aspects = Button("AesirsClassWidgetsAspectMenu", primary, "SecureHandlerClickTemplate", "Interface\\Icons\\Spell_Nature_RavenForm")
     actions.aspects.title = "Aspects"
-    actions.aspects:SetPoint("CENTER", hub, "CENTER", A.FanOffset(1, 1, FAN_RADIUS, 30, 0))
+    actions.aspects:SetPoint("CENTER", hub, "CENTER", MainFanOffset(2))
     actions.aspects:SetFrameRef("tracking", tracking)
     actions.aspects:SetFrameRef("aspects", aspects)
     actions.aspects:SetAttribute("_onclick", [[
@@ -291,7 +331,7 @@ local function Create()
     for i, action in ipairs(PET_SPELLS) do
         local button = Button("AesirsClassWidgetsPet" .. action.key, primary, "SecureActionButtonTemplate", action.icon)
         button.title = C_Spell.GetSpellName(action.id) or action.key
-        local x, y = A.FanOffset(i, 5, FAN_RADIUS, -20, -200)
+        local x, y = MainFanOffset(i + 2)
         button:SetPoint("CENTER", hub, "CENTER", x, y)
         actions[action.key] = button
     end
@@ -329,7 +369,7 @@ end
 local function Initialize()
     events = CreateFrame("Frame")
     Create()
-    for _, event in ipairs({ "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD", "SPELLS_CHANGED",
+    for _, event in ipairs({ "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD", "SPELLS_CHANGED", "ADDON_LOADED",
         "BAG_UPDATE_DELAYED", "GET_ITEM_INFO_RECEIVED", "SPELL_TEXT_UPDATE", "UNIT_PET",
         "MINIMAP_UPDATE_TRACKING", "PLAYER_REGEN_ENABLED", "EDIT_MODE_LAYOUTS_UPDATED" }) do
         -- Event availability differs from Retail. An optional unsupported event must
@@ -337,6 +377,7 @@ local function Initialize()
         if C_EventUtils.IsEventValid(event) then events:RegisterEvent(event) end
     end
     events:SetScript("OnEvent", function(_, event)
+        if event == "ADDON_LOADED" then HookSpellbook(); return end
         if event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then Create() end
         if not hub then return end
         dirty = true

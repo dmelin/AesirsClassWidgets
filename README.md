@@ -35,9 +35,11 @@ Tests run Lua 5.1 against the addon without loading Quality of Life. They cover 
 
 ## Hunter toolbar
 
-The hunter class icon appears only on hunters, initially right of the screen center. Click it to open a radial fan containing **Tracking**, **Aspects**, **Mend Pet**, **Feed Pet**, **Call Pet**, **Revive Pet**, and **Tame Beast**. Unlearned pet actions are greyed out.
+The hunter class icon appears only on hunters, initially right of the screen center. Click it to open a radial fan containing **Tracking**, **Aspects**, **Mend Pet**, **Feed Pet**, **Call Pet**, **Revive Pet**, **Tame Beast**, **Dismiss Pet**, and **Beast Training**. Unlearned pet actions are greyed out. All nine main buttons share one evenly spaced circle around the hunter icon.
 
-Buttons use circular icon masks and gold borders. The central hunter button is 44 pixels, other buttons are 32 pixels, and the first fan has a compact 48-pixel radius. Submenu spacing scales with the number of learned spells.
+Buttons use circular icon masks and gold borders. The central hunter button is 44 pixels, other buttons are 32 pixels, and the first fan has a 60-pixel radius. Submenu spacing scales with the number of learned spells.
+
+Learned spells represented by the hunter widget suppress the spellbook's missing-action-bar glow and tooltip warning. This is a cosmetic spellbook adjustment and does not occupy action-bar slots. Other spells retain their normal warnings.
 
 Tracking and Aspects open separate second-level fans containing learned spells. Opening one closes the other submenu while leaving the main fan visible. Clicking the hunter icon again closes both levels. Actions use secure click buttons; spell and food selections update outside combat, with deferred updates applied after combat.
 

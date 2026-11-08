@@ -107,6 +107,45 @@ class HunterBarTests(unittest.TestCase):
             assert(feed.attributes.macrotext:find("/stopmacro [combat]",1,true))
         ''')
 
+    def test_dismiss_and_training_are_learned_secure_actions(self):
+        self.check('''
+            learned[2641]=true; learned[5149]=true
+            hevent("PLAYER_LOGIN")
+            assert(widgets.AesirsClassWidgetsPetdismiss.attributes.spell==2641)
+            assert(widgets.AesirsClassWidgetsPettrain.attributes.spell==5149)
+            assert(widgets.AesirsClassWidgetsPettrain.attributes.type=="spell")
+        ''')
+
+    def test_spellbook_cosmetic_hook_handles_existing_and_future_items(self):
+        self.check('''
+            ActionButtonUtil={ActionBarActionStatus={NotMissing=1}}
+            function hooksecurefunc(target, key, callback)
+                local original=target[key]
+                target[key]=function(self, ...)
+                    original(self, ...); callback(self, ...)
+                end
+            end
+            SpellBookItemMixin={UpdateActionBarStatus=function(self)
+                self.actionBarStatus=2; self:UpdateActionBarAnim()
+            end}
+            local existing={spellBank=0,spellBookItemInfo={spellID=6991},
+                UpdateActionBarStatus=SpellBookItemMixin.UpdateActionBarStatus,
+                UpdateActionBarAnim=function(self) self.glow=self.actionBarStatus==2 end}
+            function EnumerateFrames(previous) if not previous then return existing end end
+            learned[6991]=true; learned[2641]=true; hevent("PLAYER_LOGIN")
+            assert(existing.actionBarStatus==1 and not existing.glow)
+            local future=setmetatable({spellBank=0,spellBookItemInfo={spellID=2641},
+                UpdateActionBarAnim=existing.UpdateActionBarAnim}, {__index=SpellBookItemMixin})
+            future:UpdateActionBarStatus(); assert(future.actionBarStatus==1 and not future.glow)
+            future.spellBookItemInfo.spellID=999
+            future:UpdateActionBarStatus(); assert(future.actionBarStatus==2 and future.glow)
+            existing.isUnlearned=true; existing:UpdateActionBarStatus()
+            assert(existing.actionBarStatus==2)
+            existing.isUnlearned=false; learned[6991]=nil
+            hevent("SPELLS_CHANGED"); htick(); existing:UpdateActionBarStatus()
+            assert(existing.actionBarStatus==2)
+        ''')
+
     def test_feed_rejects_wrong_diet_old_locked_and_missing_pet(self):
         self.check('''
             learned[6991]=true; petLevel=50

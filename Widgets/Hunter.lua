@@ -32,7 +32,7 @@ local function HookSpellbook()
 end
 local dirty, editing, elapsed = true, false, 0
 local SIZE, HUB_SIZE, FAN_RADIUS = 32, 44, 60
-local ART = "Interface\\AddOns\\AesirsClassWidgets\\Media\\"
+local MAIN_SIZE = SIZE * 1.1
 local ASPECT_IDS = { 13165, 13163, 5118, 13159, 13161, 20043, 34074, 61846 }
 local PET_SPELLS = {
     { key = "mend", id = 136, icon = "Interface\\Icons\\Ability_Hunter_MendPet" },
@@ -44,9 +44,26 @@ local PET_SPELLS = {
     { key = "train", id = 5149, icon = "Interface\\Icons\\Ability_Hunter_BeastTraining" },
 }
 
-local function MainFanOffset(index)
+local function MainFanAngle(index)
     local count = #PET_SPELLS + 2 -- Tracking, Aspects, and pet actions share one ring.
-    return A.FanOffset(index, count, FAN_RADIUS, 90, -360 * (count - 1) / count)
+    return 90 - (index - 1) * 360 / count
+end
+
+local function MainFanOffset(index)
+    return A.FanOffset(1, 1, FAN_RADIUS, MainFanAngle(index), 0)
+end
+
+local function SubFanOffset(index, count, parentIndex)
+    local spacing = SIZE + 6
+    -- All children share the hunter's origin. Keep their arc symmetric about
+    -- the parent's radial direction, with enough chord length between buttons.
+    local radius = FAN_RADIUS + SIZE + 12
+    if count > 1 then
+        radius = math.max(radius, spacing / (2 * math.sin(math.rad(100 / (count - 1)) / 2)))
+    end
+    local step = math.deg(2 * math.asin(spacing / (2 * radius)))
+    local arc = (count - 1) * step
+    return A.FanOffset(index, count, radius, MainFanAngle(parentIndex) + arc / 2, -arc)
 end
 
 local function DB()
@@ -62,49 +79,12 @@ local function DB()
     return settings.positions
 end
 
-local function LayoutKey()
-    local info = C_EditMode.GetLayouts()
-    if not info then return "default" end
-    -- The API excludes the two built-in presets from layouts but includes them
-    -- in activeLayout. The UI manager prepends those presets in its own copy.
-    if info.activeLayout <= 2 then return "preset:" .. info.activeLayout end
-    local active = info.layouts and info.layouts[info.activeLayout - 2]
-    return active and (tostring(active.layoutType) .. ":" .. active.layoutName) or ("layout:" .. info.activeLayout)
-end
-
 local function RestorePosition()
     if not hub or InCombatLockdown() then dirty = true; return end
-    local position = DB()[LayoutKey()]
+    local position = DB()[A.DialLayoutKey()]
     hub:ClearAllPoints()
     if position then hub:SetPoint("CENTER", UIParent, "BOTTOMLEFT", position.x, position.y)
     else hub:SetPoint("CENTER", UIParent, "CENTER", 260, -100) end
-end
-
-local function Tooltip(self)
-    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    if self.spellID then GameTooltip:SetSpellByID(self.spellID)
-    else GameTooltip:SetText(self.title or "Aesir Class Widgets: Hunter") end
-    if self.note then GameTooltip:AddLine(self.note, 1, 0.82, 0.3, true) end
-    GameTooltip:Show()
-end
-
-local function Button(name, parent, template, icon)
-    local button = CreateFrame("Button", name, parent, template)
-    button:SetSize(SIZE, SIZE)
-    button:RegisterForClicks("AnyUp", "AnyDown")
-    button:SetNormalTexture(ART .. "RoundBorder")
-    button:SetHighlightTexture(ART .. "RoundHighlight", "ADD")
-    button.icon = button:CreateTexture(nil, "ARTWORK")
-    button.icon:SetPoint("TOPLEFT", 3, -3)
-    button.icon:SetPoint("BOTTOMRIGHT", -3, 3)
-    button.icon:SetTexture(icon)
-    button.mask = button:CreateMaskTexture()
-    button.mask:SetAllPoints(button.icon)
-    button.mask:SetTexture("Interface\\CHARACTERFRAME\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-    button.icon:AddMaskTexture(button.mask)
-    button:SetScript("OnEnter", Tooltip)
-    button:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    return button
 end
 
 local function KnownPetSpells()
@@ -179,6 +159,20 @@ local function SelectFood()
     return best
 end
 
+local function RefreshActiveSubmenus()
+    local activeTracking = {}
+    for i = 1, C_Minimap.GetNumTrackingTypes() do
+        local info = C_Minimap.GetTrackingInfo(i)
+        if info and info.spellID and info.active then activeTracking[info.spellID] = true end
+    end
+    for _, button in ipairs(trackButtons) do
+        A.SetSubmenuActive(button, activeTracking[button.spellID])
+    end
+    for _, button in ipairs(aspectButtons) do
+        A.SetSubmenuActive(button, button.spellID and C_UnitAuras.GetPlayerAuraBySpellID(button.spellID) ~= nil)
+    end
+end
+
 local function Refresh()
     if not hub or InCombatLockdown() then dirty = true; return end
     dirty = false
@@ -224,16 +218,15 @@ local function Refresh()
         coveredSpells[info.spellID] = true
         local button = trackButtons[i]
         if not button then
-            button = Button("AesirsClassWidgetsTracking" .. i, tracking, "SecureActionButtonTemplate", info.texture)
+            button = A.CreateDialButton("AesirsClassWidgetsTracking" .. i, tracking, "SecureActionButtonTemplate", info.texture)
             trackButtons[i] = button
         end
         button.spellID, button.title = info.spellID, info.name
         button.icon:SetTexture(info.texture)
         button:SetAttribute("type", "spell")
         button:SetAttribute("spell", info.spellID)
-        local x, y = A.FanOffset(i, #known, math.max(44, #known * 13), 25, 130)
-        button:ClearAllPoints()
-        button:SetPoint("CENTER", actions.tracking, "CENTER", x, y)
+        local x, y = SubFanOffset(i, #known, 1)
+        A.PositionFanButton(button, hub, x, y, MainFanOffset(1))
         button:Show()
     end
     for i = #known + 1, #trackButtons do
@@ -249,20 +242,20 @@ local function Refresh()
         local info = C_Spell.GetSpellInfo(id)
         local button = aspectButtons[i]
         if not button then
-            button = Button("AesirsClassWidgetsAspect" .. i, aspects, "SecureActionButtonTemplate", info and info.iconID)
+            button = A.CreateDialButton("AesirsClassWidgetsAspect" .. i, aspects, "SecureActionButtonTemplate", info and info.iconID)
             aspectButtons[i] = button
         end
         button.spellID = id
         button.icon:SetTexture(info and info.iconID)
         button:SetAttribute("type", "spell")
         button:SetAttribute("spell", id)
-        local x, y = A.FanOffset(i, #aspectIDs, math.max(52, #aspectIDs * 17.5), -50, 100)
-        button:ClearAllPoints()
-        button:SetPoint("CENTER", actions.aspects, "CENTER", x, y)
+        local x, y = SubFanOffset(i, #aspectIDs, 2)
+        A.PositionFanButton(button, hub, x, y, MainFanOffset(2))
         button:Show()
     end
     for i = #aspectIDs + 1, #aspectButtons do aspectButtons[i]:SetAttribute("type", nil); aspectButtons[i]:Hide() end
     actions.aspects.note = #aspectIDs == 0 and "No learned aspect spells found." or "Opens Aspects and closes Tracking."
+    RefreshActiveSubmenus()
     HookSpellbook()
 end
 
@@ -279,7 +272,7 @@ local function Create()
     if hub or InCombatLockdown() then return end
     local _, class = UnitClass("player")
     if class ~= "HUNTER" then return end
-    hub = Button("AesirsClassWidgetsHunterBar", UIParent, "SecureHandlerClickTemplate", "Interface\\GLUES\\CHARACTERCREATE\\UI-CHARACTERCREATE-CLASSES")
+    hub = A.CreateDialButton("AesirsClassWidgetsHunterBar", UIParent, "SecureHandlerClickTemplate", "Interface\\GLUES\\CHARACTERCREATE\\UI-CHARACTERCREATE-CLASSES")
     hub:SetSize(HUB_SIZE, HUB_SIZE)
     local coords = CLASS_ICON_TCOORDS.HUNTER
     hub.icon:SetTexCoord(unpack(coords))
@@ -296,6 +289,8 @@ local function Create()
     primary:Hide()
     tracking:Hide()
     aspects:Hide()
+    A.EnableDialCloseAnimation(hub, primary, { tracking, aspects })
+    A.BindDialEscape(hub, primary, "AesirsClassWidgetsHunterBar")
     hub:SetFrameRef("primary", primary)
     hub:SetFrameRef("tracking", tracking)
     hub:SetFrameRef("aspects", aspects)
@@ -303,36 +298,43 @@ local function Create()
         if down then return end
         local fan = self:GetFrameRef("primary")
         if fan:IsShown() then
+            self:CallMethod("AnimateDialClose")
             fan:Hide(); self:GetFrameRef("tracking"):Hide(); self:GetFrameRef("aspects"):Hide()
         else fan:Show() end
     ]])
-    actions.tracking = Button("AesirsClassWidgetsTrackingMenu", primary, "SecureHandlerClickTemplate", "Interface\\Icons\\Ability_Tracking")
+    actions.tracking = A.CreateDialButton("AesirsClassWidgetsTrackingMenu", primary, "SecureHandlerClickTemplate", "Interface\\Icons\\Ability_Tracking", MAIN_SIZE)
     actions.tracking.title = "Tracking"
-    actions.tracking:SetPoint("CENTER", hub, "CENTER", MainFanOffset(1))
+    local trackingX, trackingY = MainFanOffset(1)
+    A.PositionFanButton(actions.tracking, hub, trackingX, trackingY, 0, 0)
     actions.tracking:SetFrameRef("tracking", tracking)
     actions.tracking:SetFrameRef("aspects", aspects)
+    actions.tracking:SetFrameRef("hub", hub)
     actions.tracking:SetAttribute("_onclick", [[
         if down then return end
+        self:GetFrameRef("hub"):CallMethod("AnimateSubmenuClose")
         self:GetFrameRef("aspects"):Hide()
         local fan = self:GetFrameRef("tracking")
         if fan:IsShown() then fan:Hide() else fan:Show() end
     ]])
-    actions.aspects = Button("AesirsClassWidgetsAspectMenu", primary, "SecureHandlerClickTemplate", "Interface\\Icons\\Spell_Nature_RavenForm")
+    actions.aspects = A.CreateDialButton("AesirsClassWidgetsAspectMenu", primary, "SecureHandlerClickTemplate", "Interface\\Icons\\Spell_Nature_RavenForm", MAIN_SIZE)
     actions.aspects.title = "Aspects"
-    actions.aspects:SetPoint("CENTER", hub, "CENTER", MainFanOffset(2))
+    local aspectsX, aspectsY = MainFanOffset(2)
+    A.PositionFanButton(actions.aspects, hub, aspectsX, aspectsY, 0, 0)
     actions.aspects:SetFrameRef("tracking", tracking)
     actions.aspects:SetFrameRef("aspects", aspects)
+    actions.aspects:SetFrameRef("hub", hub)
     actions.aspects:SetAttribute("_onclick", [[
         if down then return end
+        self:GetFrameRef("hub"):CallMethod("AnimateSubmenuClose")
         self:GetFrameRef("tracking"):Hide()
         local fan = self:GetFrameRef("aspects")
         if fan:IsShown() then fan:Hide() else fan:Show() end
     ]])
     for i, action in ipairs(PET_SPELLS) do
-        local button = Button("AesirsClassWidgetsPet" .. action.key, primary, "SecureActionButtonTemplate", action.icon)
+        local button = A.CreateDialButton("AesirsClassWidgetsPet" .. action.key, primary, "SecureActionButtonTemplate", action.icon, MAIN_SIZE)
         button.title = C_Spell.GetSpellName(action.id) or action.key
         local x, y = MainFanOffset(i + 2)
-        button:SetPoint("CENTER", hub, "CENTER", x, y)
+        A.PositionFanButton(button, hub, x, y, 0, 0)
         actions[action.key] = button
     end
     feedButton = actions.feed
@@ -356,7 +358,7 @@ local function Create()
         if InCombatLockdown() then return end
         hub:StopMovingOrSizing()
         local x, y = hub:GetCenter()
-        if x and y then DB()[LayoutKey()] = { x = x, y = y } end
+        if x and y then DB()[A.DialLayoutKey()] = { x = x, y = y } end
         RestorePosition()
     end)
     mover:Hide()
@@ -367,6 +369,7 @@ local function Create()
 end
 
 local function Initialize()
+    A.InitializeHunterPetXP()
     events = CreateFrame("Frame")
     Create()
     for _, event in ipairs({ "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD", "SPELLS_CHANGED", "ADDON_LOADED",
@@ -389,6 +392,7 @@ local function Initialize()
         if elapsed < 0.25 then return end
         elapsed = 0
         if dirty and hub and not InCombatLockdown() then Refresh() end
+        if hub then RefreshActiveSubmenus() end
     end)
 
 end
